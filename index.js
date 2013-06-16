@@ -43,6 +43,7 @@ function Store (opts) {
     { start: encode([0, null])
     , end: encode([0, {}])
     }
+
   var reader = this.lev.createReadStream(opts)
   reader.on('data', function (data) {
     var key = decode(data.key)
@@ -132,7 +133,7 @@ Mutex.prototype.write = function (doc, cb) {
 }
 Mutex.prototype._write = function (meta, doc, cb) {
   var rev = meta.rev
-  if (rev !== doc._rev) return cb(new Error('rev does not match.'))
+  if (rev !== doc._rev && ! meta._deleted) return cb(new Error('rev does not match.'))
   if (!rev) doc._rev = '1-'+uuid()
   else {
     var seq = parseInt(rev.slice(0, rev.indexOf('-')))
@@ -142,6 +143,7 @@ Mutex.prototype._write = function (meta, doc, cb) {
   if (!meta.revs) meta.revs = []
 
   meta.rev = doc._rev
+  meta._deleted = doc._deleted
 
   // Cache the sequence change
   this.sequence = this.sequence + 1
@@ -215,15 +217,24 @@ util.inherits(Database, events.EventEmitter)
 Database.prototype.get = function (key, cb) {
   peek.last(this.store.lev, {end: encode([this.name, 1, key, {}])}, function (err, key, value) {
     if (err) return cb(err)
-    throw new Error('no implemented')
+    if (value._deleted) return cb(new Error('Not found. Deleted.'))
+    cb(null, value)
   })
 }
 Database.prototype.put = function (obj, cb) {
   if (!obj._id) return cb(new Error('must have _id.'))
-  this.mutex.put(obj, function (e, info) {
-    console.log(e, info)
-  })
+  this.mutex.put(obj, cb)
 }
+Database.prototype.del = function (obj, cb) {
+  if (!obj._id) return cb(new Error('must have _id.'))
+  obj._deleted = true
+  this.mutex.write(obj, cb)
+}
+Database.prototype.compact = function (cb) {
+  throw new Error('not implemented.')
+}
+
+Database.prototype.delete = Database.prototype.del
 Database.prototype.meta = function (key, cb) {
   this.store.lev.get(encode([this.name, 1, key]), cb)
 }
