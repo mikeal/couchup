@@ -11,7 +11,10 @@
     "lru-cache": "~2.3.0",
     "mapleTree": "~0.5.0-1",
     "node-uuid": "~1.4.0",
-    "once": "~1.1.1"
+    "once": "~1.1.1",
+    "lodash": "~1.3.1",
+    "async": "~0.2.9",
+    "uuid": "~1.4.1"
   },
   "devDependencies": {
     "cleanup": "~0.2.0",

@@ -7,8 +7,8 @@ var couchup = require('../')
 
 var d = cleanup(function (error) {
   rimraf.sync(__dirname+'/testdb')
-  ok.done()
   if (error) process.exit(1)
+  ok.done()
 })
 
 function count (lev, cb) {

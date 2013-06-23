@@ -1,12 +1,12 @@
 var util = require('util')
   , events = require('events')
   , levelup = require('levelup')
-  , mapleTree = require('mapleTree')
   , bytewise = require('bytewise')
   , once = require('once')
   , lru = require('lru-cache')
   , uuid = require('node-uuid')
   , peek = require('level-peek')
+  , http = require('./lib/http')
   ;
 
 var encode = bytewise.encode
@@ -68,8 +68,8 @@ Store.prototype.createDatabase = function (name, cb) {
 Store.prototype.getDatabase = function (name, cb) {
   var self = this
   this.defer(function () {
-    if (!this.databases[name]) return cb(new Error('Database does not exist.'))
-    cb(null, this.databases[name])
+    if (!self.databases[name]) return cb(new Error('Database does not exist.'))
+    cb(null, self.databases[name])
   })
 }
 Store.prototype._write = function (obj, cb) {
@@ -109,10 +109,11 @@ Mutex.prototype.clear = function () {
   if (this.deferring) return
   this.deferring = true
   this.cache = lru()
-  this.database.store.lev.get(encode([0, this.database.name]), function (e, seq) {
+  this.database.store.lev.get(encode([0, this.database.name]), function (e, info) {
     // TODO: how and why would we get an error here and what is the best way to handle it
     if (e) throw e
-    self.sequence = seq
+    self.sequence = info[0]
+    self.doc_count = info[1]
     self.kick()
   })
 }
@@ -149,11 +150,14 @@ Mutex.prototype._write = function (meta, doc, cb) {
   this.sequence = this.sequence + 1
   meta.revs.push([this.sequence, doc._rev])
 
+  if (meta._deleted) this.doc_count = this.doc_count - 1
+  else this.doc_count + 1
+
   // Update the database sequence
   this.database.store._write(
     { type: 'put'
     , key: [0, this.database.name]
-    , value: this.sequence
+    , value: [this.sequence, this.doc_count]
     }
   )
 
@@ -238,9 +242,16 @@ Database.prototype.delete = Database.prototype.del
 Database.prototype.meta = function (key, cb) {
   this.store.lev.get(encode([this.name, 1, key]), cb)
 }
+Database.prototype.info = function (cb) {
+  var self = this
+  this.mutex.defer(function () {
+    cb(null, {update_seq:self.mutex.sequence, doc_count:self.mutex.doc_count})
+  })
+}
 
 function couchup (filename) {
   return new Store({location:filename})
 }
 
 module.exports = couchup
+module.exports.http = http
