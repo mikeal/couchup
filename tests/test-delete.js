@@ -35,7 +35,7 @@ c.createDatabase('test', function (e, db) {
           ok('removed')
           count(db.store.lev, function (e, num) {
             if (e) throw e
-            assert.equal(num, 6)
+            assert.equal(num, 5)
             ok('size')
             d.cleanup()
             // db.compact(function (e) {

@@ -109,10 +109,11 @@ Mutex.prototype.clear = function () {
   if (this.deferring) return
   this.deferring = true
   this.cache = lru()
-  this.database.store.lev.get(encode([0, this.database.name]), function (e, info) {
+
+  peek.last(this.store.lev, {end: encode([this.database.name, 0, {}])}, function (e, key, info) {
     // TODO: how and why would we get an error here and what is the best way to handle it
     if (e) throw e
-    self.sequence = info[0]
+    self.sequence = decode(key)[2]
     self.doc_count = info[1]
     self.kick()
   })
@@ -141,57 +142,32 @@ Mutex.prototype._write = function (meta, doc, cb) {
     if (isNaN(seq)) { console.error('BAD!'); seq = 1}
     doc._rev = (seq + 1)+'-'+uuid()
   }
-  if (!meta.revs) meta.revs = []
 
   meta.rev = doc._rev
   meta._deleted = doc._deleted
 
   // Cache the sequence change
   this.sequence = this.sequence + 1
-  meta.revs.push([this.sequence, doc._rev])
 
   if (meta._deleted) this.doc_count = this.doc_count - 1
   else this.doc_count + 1
 
-  // Update the database sequence
-  this.database.store._write(
-    { type: 'put'
-    , key: [0, this.database.name]
-    , value: [this.sequence, this.doc_count]
-    }
-  )
-
-  if (meta.seq) {
-    // Remove previous sequence
-    this.database.store._write(
-      { type: 'delete'
-      , key: [this.database.name, 0, this.sequence]
-      }
-    )
-  }
   meta.seq = this.sequence
 
   // Write the new sequence
   this.database.store._write(
     { type: 'put'
     , key: [this.database.name, 0, this.sequence]
-    , value: meta
+    , value: [meta, this.doc_count]
     }
   )
 
-  // Update the document metadata
-  this.database.store._write(
-    { type: 'put'
-    , key: [this.database.name, 1, doc._id]
-    , value: meta
-    }
-  )
   this.cache.set(doc._id, meta)
 
   // Write an entry for this revision
   this.database.store._write(
     { type: 'put'
-    , key: [this.database.name, 1, doc._id, this.sequence, doc._rev]
+    , key: [this.database.name, 1, doc._id, this.sequence, doc._rev, !!doc._deleted]
     , value: doc
     }
     , this.callback({id:doc._id, rev:doc._rev, seq:this.sequence}, cb) // This is only necessary once since batch() will err for all.
@@ -218,10 +194,13 @@ function Database (store, name, seq) {
   this.mutex = new Mutex(this, seq)
 }
 util.inherits(Database, events.EventEmitter)
-Database.prototype.get = function (key, cb) {
-  peek.last(this.store.lev, {end: encode([this.name, 1, key, {}])}, function (err, key, value) {
+Database.prototype.get = function (id, cb) {
+  var self = this
+  peek.last(this.store.lev, {end: encode([this.name, 1, id, {}])}, function (err, key, value) {
     if (err) return cb(err)
     if (value._deleted) return cb(new Error('Not found. Deleted.'))
+    key = decode(key)
+    if (key[2] !== id || key[0] !== self.name || key[1] !== 1) return cb(new Error('Not found.'))
     cb(null, value)
   })
 }
@@ -239,8 +218,14 @@ Database.prototype.compact = function (cb) {
 }
 
 Database.prototype.delete = Database.prototype.del
-Database.prototype.meta = function (key, cb) {
-  this.store.lev.get(encode([this.name, 1, key]), cb)
+Database.prototype.meta = function (id, cb) {
+  peek.last(this.store.lev, {end: encode([this.name, 1, id, {}])}, function (err, key, value) {
+    if (err) return cb(err)
+    key = decode(key)
+    if (key[2] !== id || key[0] !== self.name || key[1] !== 1) return cb(new Error('Not found.'))
+    // [this.database.name, 1, doc._id, this.sequence, doc._rev, !!doc._deleted]
+    cb(null, {_deleted: key[5], rev: key[4], id: id, seq: key[3]})
+  })
 }
 Database.prototype.info = function (cb) {
   var self = this
