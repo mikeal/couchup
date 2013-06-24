@@ -80,12 +80,12 @@ Store.prototype._write = function (obj, cb) {
     setImmediate(function () {
       self._batch(self._writes)
       self._writes = []
-      self._nt = false
     })
     this._nt = true
   }
 }
 Store.prototype._batch = function (writes) {
+  var self = this
   var _writes = writes.map(function (w) {
     var r = w[0]
     if (r.key) r.key = encode(r.key)
@@ -94,6 +94,12 @@ Store.prototype._batch = function (writes) {
   this.lev.batch(_writes, function (err) {
     if (err) writes.forEach(function (w) { w[1](err) })
     else writes.forEach(function (w) { w[1](null) })
+    if (self._writes.length) {
+      self._batch(self._writes)
+      self._writes = []
+    } else {
+      self._nt = false
+    }
   })
 }
 
