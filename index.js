@@ -33,6 +33,8 @@ function Store (opts) {
   var self = this
   opts.keyEncoding = 'binary'
   opts.valueEncoding = 'json'
+  // if (!opts.cacheSize) opts.cacheSize = 32 * 1024 * 1024
+  // if (!opts.writeBufferSize) opts.cacheSize = 32 * 1024 * 1024
   this.opts = opts
   this.lev = levelup(opts.location, opts)
   this._writes = []
@@ -54,7 +56,7 @@ function Store (opts) {
   })
 }
 util.inherits(Store, Deferring)
-Store.prototype.createDatabase = function (name, cb) {
+Store.prototype.put = function (name, cb) {
   var self = this
   this.defer(function () {
     if (self.databases[name]) return cb(new Error("Database already exists."))
@@ -65,13 +67,35 @@ Store.prototype.createDatabase = function (name, cb) {
     self.databases[name] = new Database(self, name, 0)
   })
 }
-Store.prototype.getDatabase = function (name, cb) {
+Store.prototype.get = function (name, cb) {
   var self = this
   this.defer(function () {
     if (!self.databases[name]) return cb(new Error('Database does not exist.'))
     cb(null, self.databases[name])
   })
 }
+Store.prototype.delete = function (name, cb) {
+  var p = {}
+    , self = this
+    ;
+  self._delete([0, name], function () {
+    var all = self.lev.createKeyStream(
+      { start: encode([name, null])
+      , end: encode([name, {}])
+      })
+    all.on('data', function (data) {
+      self._write({type:'del', key:data})
+    })
+    all.on('end', function () {
+      delete self.databases[name]
+      cb(null)
+    })
+  })
+}
+Store.prototype._delete = function (key, cb) {
+  this._write({type:'del', key:encode(key)}, cb)
+}
+
 Store.prototype._write = function (obj, cb) {
   var self = this
   cb = cb ? once(cb) : function () {}
@@ -88,7 +112,7 @@ Store.prototype._batch = function (writes) {
   var self = this
   var _writes = writes.map(function (w) {
     var r = w[0]
-    if (r.key) r.key = encode(r.key)
+    if (r.key && !Buffer.isBuffer(r.key)) r.key = encode(r.key)
     return r
   })
   this.lev.batch(_writes, function (err) {
@@ -225,6 +249,7 @@ Database.prototype.compact = function (cb) {
 
 Database.prototype.delete = Database.prototype.del
 Database.prototype.meta = function (id, cb) {
+  var self = this
   peek.last(this.store.lev, {end: encode([this.name, 1, id, {}])}, function (err, key, value) {
     if (err) return cb(err)
     key = decode(key)

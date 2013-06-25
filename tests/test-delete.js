@@ -21,7 +21,7 @@ function count (lev, cb) {
 }
 
 var c = couchup(__dirname+'/testdb')
-c.createDatabase('test', function (e, db) {
+c.put('test', function (e, db) {
   if (e) throw e
   ok('create db')
   db.put({_id:'asdf', test:1}, function (e, info) {
