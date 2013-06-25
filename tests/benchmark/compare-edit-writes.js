@@ -11,8 +11,7 @@ var request = require('request')
 http.globalAgent.maxSockets = parallel
 
 function test (str, port, cb) {
-
-  createDatabase(port, function () {
+  put(port, function () {
     startTest(port, str)
     setTimeout(function () {
       stopTest(str, function () {
@@ -24,7 +23,7 @@ function test (str, port, cb) {
   })
 }
 
-function createDatabase (port, cb) {
+function put (port, cb) {
   request.put('http://localhost:'+port+'/test-benchmark', {json:true}, function (e, resp, body) {
     if (e) throw e
     assert(resp.statusCode, 201)
