@@ -48,3 +48,16 @@ First box is for a local node API, second box is for the compatible HTTP interfa
 
 - [ ] [ ] _changes
 
+### Divergences
+
+CouchDB and TouchDB both store and replicate the revision info for the full revision tree. They don't store all of the bodies, especially after compaction, but they do store a tree of all the revs of every replica they've replication with. This has always been intended to be used by application developers who would like to resolve conflicts in a more application specific way than the default "most edits wins" model that *all* couch compatible databases **MUST** implement (otherwise different nodes would come to different conclusions about which document is the current winner when there is a conflict).
+
+Being that the vast majority of people using CouchDB compatible data stores don't poll for _conflicts and resolve them, relying instead on the default "most edits wins" model, `couchup` has decided not to store the full revision tree for other replicas.
+
+All revisions written to a couchup node are stored unless compaction. The latest rev from any replica is stored even if it doesn't *win* but the rev tree of other nodes is not stored, only the latest revision, and no sequence index is written for revisions that don't with (they are only retrievable by querying for the document at that specific revision).
+
+This tradeoff makes couchup a much better storage system for documents that have a high update ration, especially when there are many documents that all have high update ratios. It means that compaction will bring the overall size of the database back down to what it would be if all updated documents were new. The downside is that application authors who want to use the rev tree of replicated nodes to do more advanced conflict resolution won't have access to a replicated rev tree.
+
+*It should also be noted that even Apache CouchDB has a maximum number of revisions that are stored before being "stemmed", without some kind of limit the metadata could grow to be exponentially larger than the actual document data.*
+
+
