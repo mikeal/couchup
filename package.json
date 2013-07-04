@@ -14,7 +14,8 @@
     "once": "~1.1.1",
     "lodash": "~1.3.1",
     "async": "~0.2.9",
-    "uuid": "~1.4.1"
+    "okdone": "~0.3.0",
+    "level-mutex": "~0.2.0"
   },
   "devDependencies": {
     "cleanup": "~0.2.0",

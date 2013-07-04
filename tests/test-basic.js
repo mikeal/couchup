@@ -4,7 +4,7 @@ var couchup = require('../')
   , assert = require('assert')
   , ok = require('okdone')
   , bytewise = require('bytewise')
-  , uuid = require('uuid')
+  , uuid = require('node-uuid')
   ;
 
 var d = cleanup(function (error) {

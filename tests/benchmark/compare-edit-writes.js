@@ -5,7 +5,7 @@ var request = require('request')
   , concastack = require('concastack')
   , duration = 60 * 1000
   , parallel = 10
-  , uuid = require('uuid')
+  , uuid = require('node-uuid')
   ;
 
 http.globalAgent.maxSockets = parallel

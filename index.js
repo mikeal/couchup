@@ -7,10 +7,13 @@ var util = require('util')
   , uuid = require('node-uuid')
   , peek = require('level-peek')
   , http = require('./lib/http')
+  , mutex = require('level-mutex')
+  , crypto = require('crypto')
   ;
 
 var encode = bytewise.encode
   , decode = bytewise.decode
+  , noop = function () {}
   ;
 
 function Deferring () {
@@ -37,6 +40,7 @@ function Store (opts) {
   // if (!opts.writeBufferSize) opts.cacheSize = 32 * 1024 * 1024
   this.opts = opts
   this.lev = levelup(opts.location, opts)
+  this.mutex = mutex(this.lev)
   this._writes = []
   this.deferring = true
   this.databases = {}
@@ -46,7 +50,7 @@ function Store (opts) {
     , end: encode([0, {}])
     }
 
-  var reader = this.lev.createReadStream(opts)
+  var reader = this.mutex.lev.createReadStream(opts)
   reader.on('data', function (data) {
     var key = decode(data.key)
     self.databases[key[2]] = new Database(self, key[2], data.value)
@@ -60,7 +64,7 @@ Store.prototype.put = function (name, cb) {
   var self = this
   this.defer(function () {
     if (self.databases[name]) return cb(new Error("Database already exists."))
-    self._write({type:'put', key:[0, name], value:0}, function (err) {
+    self.mutex.put(encode([0, name]), 0, function (err) {
       if (err) return cb(err)
       return cb(null, self.databases[name])
     })
@@ -78,155 +82,82 @@ Store.prototype.delete = function (name, cb) {
   var p = {}
     , self = this
     ;
-  self._delete([0, name], function () {
+  self.mutex.del(encode([0, name]), function () {
     var all = self.lev.createKeyStream(
-      { start: encode([name, null])
-      , end: encode([name, {}])
-      })
-    all.on('data', function (data) {
-      self._write({type:'del', key:data})
+        { start: encode([name, null])
+        , end: encode([name, {}])
+        })
+      , count = 0
+      ;
+    all.on('data', function (rawkey) {
+      self.mutex.del(rawkey, noop)
+      count += 1
     })
     all.on('end', function () {
       delete self.databases[name]
-      cb(null)
+      if (count === 0) cb(null)
+      else self.mutex.afterWrite(function () {cb(null)})
     })
   })
 }
-Store.prototype._delete = function (key, cb) {
-  this._write({type:'del', key:encode(key)}, cb)
-}
 
-Store.prototype._write = function (obj, cb) {
-  var self = this
-  cb = cb ? once(cb) : function () {}
-  this._writes.push([obj, cb])
-  if (!this._nt) {
-    setImmediate(function () {
-      self._batch(self._writes)
-      self._writes = []
-    })
-    this._nt = true
+
+function hashdoc (doc) {
+  if (doc._rev) {
+    var rev = doc._rev
+    delete doc._rev
   }
-}
-Store.prototype._batch = function (writes) {
-  var self = this
-  var _writes = writes.map(function (w) {
-    var r = w[0]
-    if (r.key && !Buffer.isBuffer(r.key)) r.key = encode(r.key)
-    return r
-  })
-  this.lev.batch(_writes, function (err) {
-    if (err) writes.forEach(function (w) { w[1](err) })
-    else writes.forEach(function (w) { w[1](null) })
-    if (self._writes.length) {
-      self._batch(self._writes)
-      self._writes = []
-    } else {
-      self._nt = false
-    }
-  })
-}
-
-function Mutex (database, seq) {
-  Deferring.call(this)
-  this.database = database
-  this.sequence = seq
-  this.cache = lru()
-}
-util.inherits(Mutex, Deferring)
-Mutex.prototype.clear = function () {
-  var self = this
-  if (this.deferring) return
-  this.deferring = true
-  this.cache = lru()
-
-  peek.last(this.store.lev, {end: encode([this.database.name, 0, {}])}, function (e, key, info) {
-    // TODO: how and why would we get an error here and what is the best way to handle it
-    if (e) throw e
-    self.sequence = decode(key)[2]
-    self.doc_count = info[1]
-    self.kick()
-  })
-}
-Mutex.prototype.put = function (doc, cb) {
-  var self = this
-  self.defer(function () {self.write(doc, cb)})
-}
-Mutex.prototype.write = function (doc, cb) {
-  var self = this
-  if (this.cache.has(doc._id)) {
-    self._write(this.cache.get(doc._id), doc, cb)
-  } else {
-    this.database.meta(doc._id, function (e, meta) {
-      if (e) return self._write({id:doc._id}, doc, cb)
-      self._write(meta, doc, cb)
-    })
+  var hash = crypto.createHash('md5').update(JSON.stringify(doc)).digest("hex")
+  if (rev) {
+    doc._rev = rev
   }
+  return hash
 }
-Mutex.prototype._write = function (meta, doc, cb) {
-  var rev = meta.rev
-  if (rev !== doc._rev && ! meta._deleted) return cb(new Error('rev does not match.'))
-  if (!rev) doc._rev = '1-'+uuid()
-  else {
-    var seq = parseInt(rev.slice(0, rev.indexOf('-')))
-    if (isNaN(seq)) { console.error('BAD!'); seq = 1}
-    doc._rev = (seq + 1)+'-'+uuid()
-  }
 
-  meta.rev = doc._rev
-  meta._deleted = doc._deleted
-
-  // Cache the sequence change
-  this.sequence = this.sequence + 1
-
-  if (meta._deleted) this.doc_count = this.doc_count - 1
-  else this.doc_count + 1
-
-  meta.seq = this.sequence
-
-  // Write the new sequence
-  this.database.store._write(
-    { type: 'put'
-    , key: [this.database.name, 0, this.sequence]
-    , value: [meta, this.doc_count]
-    }
-  )
-
-  this.cache.set(doc._id, meta)
-
-  // Write an entry for this revision
-  this.database.store._write(
-    { type: 'put'
-    , key: [this.database.name, 1, doc._id, this.sequence, doc._rev, !!doc._deleted]
-    , value: doc
-    }
-    , this.callback({id:doc._id, rev:doc._rev, seq:this.sequence}, cb) // This is only necessary once since batch() will err for all.
-  )
-
-}
-Mutex.prototype.callback = function (info, cb) {
-  var self = this
-    , ret = function (err) {
-        if (err) {
-          self.clear()
-          cb(err)
-        } else {
-          cb(null, info)
-        }
-      }
-    ;
-  return ret
+function revint (rev) {
+  var seq
+  if (!rev) seq = 0
+  else seq = parseInt(rev.slice(0, rev.indexOf('-')))
+  if (isNaN(seq)) { console.error('BAD!'); seq = 0}
+  return seq
 }
 
 function Database (store, name, seq) {
   this.store = store
   this.name = name
-  this.mutex = new Mutex(this, seq)
+  this.mutex = mutex(store.lev)
+  this.cache = lru()
+  this.pending = []
+
+  var self = this
+  self.mutex.on('flushed', function () {
+    self.pending = []
+  })
+
+  // TODO: start bloom filter
+
+  // get sequence
+  //   because this is the first read sent to the mutex
+  //   we'll be able to get the first sequence
+  //   before we do any writes.
+  self.mutex.peekLast({end: encode([self.name, 0, {}])}, function (e, key, info) {
+    // TODO: how and why would we get an error here and what is the best way to handle it
+    if (e) throw e
+    key = decode(key)
+    if (key[0] !== self.name || key[1] !== 0) {
+      self.sequence = 0
+      self.doc_count = 0
+    } else {
+      self.sequence = key[2]
+      self.doc_count = info[1]
+    }
+    self.emit('init')
+  })
 }
 util.inherits(Database, events.EventEmitter)
 Database.prototype.get = function (id, cb) {
   var self = this
-  peek.last(this.store.lev, {end: encode([this.name, 1, id, {}])}, function (err, key, value) {
+  self.mutex.peekLast({end: encode([this.name, 1, id, {}])}, function (err, key, value) {
     if (err) return cb(err)
     if (value._deleted) return cb(new Error('Not found. Deleted.'))
     key = decode(key)
@@ -234,23 +165,139 @@ Database.prototype.get = function (id, cb) {
     cb(null, value)
   })
 }
-Database.prototype.put = function (obj, cb) {
-  if (!obj._id) return cb(new Error('must have _id.'))
-  this.mutex.put(obj, cb)
+
+Database.prototype.put = function (doc, opts, cb) {
+  var self = this
+  if (!cb) {
+    cb = opts
+    opts = {}
+  }
+  if (!doc._id) doc._id = uuid()
+
+  function _save (meta) {
+    var seq
+      ;
+    // There is a question about whether or not this is necessary.
+    // Because we don't store the whole rev tree metadata there isn't much that people
+    // will do with revs that don't win.
+    // But, I'm concerned that replication clients will write and then immediately read
+    // the rev they just wrote, which will cause problems if we don't have it stored while they
+    // replicate. Regardless, it'll be gone after compaction if it doesn't win.
+    if (opts.new_edits === false) {
+      // If the newedit rev wins (has more edits) write that rev as a new seq
+      // If the newedit doesn't win write it to the document store
+      // but don't write a sequence, use -1 as the sequence in meta
+      var prev = revint(meta.rev)
+        , curr = revint(doc._rev)
+        ;
+      if (curr === prev) {
+        // string check (Q: is this compatible with other implementations?)
+        if (meta.rev > doc._rev) {
+          seq = -1
+        } else {
+          seq = self.sequence + 1
+        }
+      } else if (curr > prev) {
+        seq = self.sequence + 1
+      } else {
+        seq = -1
+      }
+    } else {
+      var prev = revint(meta.rev)
+      doc._rev = prev + 1 + '-' + hashdoc(doc)
+      seq = self.sequence + 1
+    }
+
+    meta.rev = doc._rev
+    meta._deleted = doc._deleted
+    meta.seq = seq
+
+    self.sequence = seq
+
+    if (meta._deleted) self.doc_count = self.doc_count - 1
+    else self.doc_count + 1
+
+    // Write the new sequence
+    if (seq !== -1) self.mutex.put(encode([self.name, 0, meta.seq]), [meta, self.doc_count], noop)
+
+    // Write an entry for this revision
+    self.mutex.put(encode([self.name, 1, doc._id, meta.seq, doc._rev, !!doc._deleted]), doc, function (e) {
+      if (e) return cb(e)
+      cb(null, {rev:meta.rev, _deleted:meta._deleted, id:doc._id, seq:meta.seq})
+    })
+
+    // write cache and pending
+    self.cache.set(doc._id, meta)
+    self.pending.push(doc._id)
+  }
+
+  function _write (e, meta) {
+    if (_checkPending()) return
+
+    if (e || meta.rev === doc._rev || opts.new_edits === false) {
+      _save(meta || {})
+    } else {
+      cb(new Error('rev does not match.'))
+    }
+  }
+
+  function _checkPending () {
+    // If a write on this document is already pending then
+    // we *know* the rev is out of date.
+    if (self.pending.indexOf(doc._id) !== -1) {
+      if (opts.new_edits === false) self.meta(doc._id, _write)
+      else cb(new Error('rev does not match.'))
+      return true
+    }
+    return false
+  }
+  if (_checkPending()) return
+
+  if (self.cache.has(doc._id)) {
+    _write(null, this.cache.get(doc._id))
+  } else {
+    self.meta(doc._id, _write)
+  }
 }
-Database.prototype.del = function (obj, cb) {
-  if (!obj._id) return cb(new Error('must have _id.'))
-  obj._deleted = true
-  this.mutex.write(obj, cb)
+Database.prototype.del = function (doc, cb) {
+  if (!doc._id) return cb(new Error('must have _id.'))
+  doc._deleted = true
+  this.put(doc, cb)
 }
 Database.prototype.compact = function (cb) {
-  throw new Error('not implemented.')
+  var self = this
+    , keys = self.store.lev.createKeyStream(
+      { end: encode([this.name, 1, null])
+      , start: encode([this.name, 1, {}])
+      , reverse: true
+      })
+    , current = null
+    , pending = null
+    , count = 0
+    ;
+  keys.on('data', function (rawkey) {
+    var key = decode(rawkey)
+      , seq = key[3]
+      , docid = key[2]
+      ;
+
+    if (current === docid) {
+      self.mutex.del(encode([self.name, 0, seq]), noop)
+      self.mutex.del(rawkey, noop)
+      count = count + 1
+    }
+    current = docid
+  })
+  keys.on('end', function () {
+    if (count === 0) cb()
+    else self.mutex.afterWrite(function () { cb(null, count) })
+  })
 }
 
 Database.prototype.delete = Database.prototype.del
 Database.prototype.meta = function (id, cb) {
   var self = this
-  peek.last(this.store.lev, {end: encode([this.name, 1, id, {}])}, function (err, key, value) {
+  self.mutex.peekLast({end: encode([self.name, 1, id, {}])}, function (err, key, value) {
     if (err) return cb(err)
     key = decode(key)
     if (key[2] !== id || key[0] !== self.name || key[1] !== 1) return cb(new Error('Not found.'))
@@ -260,9 +307,11 @@ Database.prototype.meta = function (id, cb) {
 }
 Database.prototype.info = function (cb) {
   var self = this
-  this.mutex.defer(function () {
-    cb(null, {update_seq:self.mutex.sequence, doc_count:self.mutex.doc_count})
-  })
+  if (typeof this.sequence !== 'undefined') {
+    cb(null, {update_seq:self.sequence, doc_count:self.doc_count})
+  } else {
+    self.on('init', function () { self.info(cb) })
+  }
 }
 
 function couchup (filename) {
