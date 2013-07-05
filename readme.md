@@ -36,6 +36,7 @@ First box is for a local node API, second box is for the compatible HTTP interfa
 - [x] [x] write
 - [x] [x] get
 - [x] [ ] delete
+- [ ] [ ] new_edits = false
 
 #### Views
 

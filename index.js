@@ -9,6 +9,7 @@ var util = require('util')
   , http = require('./lib/http')
   , mutex = require('level-mutex')
   , crypto = require('crypto')
+  , bloomfilter = require('bloomfilter')
   ;
 
 var encode = bytewise.encode
@@ -134,8 +135,6 @@ function Database (store, name, seq) {
     self.pending = []
   })
 
-  // TODO: start bloom filter
-
   // get sequence
   //   because this is the first read sent to the mutex
   //   we'll be able to get the first sequence
@@ -153,6 +152,26 @@ function Database (store, name, seq) {
     }
     self.emit('init')
   })
+
+  // start bloom filter
+  if (typeof store.opts.bloom === 'undefined') {
+    store.opts.bloom = {size: 64 * 256 * 256, hashes: 16}
+  }
+  if (store.opts.bloom) {
+    var changes = self.changes()
+    self._bloom = new bloomfilter.BloomFilter(store.opts.bloom.size, store.opts.bloom.hashes)
+    function onRow (row) {
+      self._bloom.add(row.id)
+    }
+    self.on('change', onRow)
+    changes.on('row', onRow)
+    changes.on('end', function () {
+      // Make sure we don't create documents that aren't in the bloom
+      // filter before the sequence has been initialized.
+      if (typeof self.sequence !== 'undefined') self.bloom = self._bloom
+      else self.on('init', function () { self.bloom = self._bloom })
+    })
+  }
 }
 util.inherits(Database, events.EventEmitter)
 Database.prototype.get = function (id, cb) {
@@ -211,6 +230,7 @@ Database.prototype.put = function (doc, opts, cb) {
     meta.rev = doc._rev
     meta._deleted = doc._deleted
     meta.seq = seq
+    meta.id = doc._id
 
     self.sequence = seq
 
@@ -223,7 +243,8 @@ Database.prototype.put = function (doc, opts, cb) {
     // Write an entry for this revision
     self.mutex.put(encode([self.name, 1, doc._id, meta.seq, doc._rev, !!doc._deleted]), doc, function (e) {
       if (e) return cb(e)
-      cb(null, {rev:meta.rev, _deleted:meta._deleted, id:doc._id, seq:meta.seq})
+      self.emit('change', meta)
+      cb(null, meta)
     })
 
     // write cache and pending
@@ -255,6 +276,8 @@ Database.prototype.put = function (doc, opts, cb) {
 
   if (self.cache.has(doc._id)) {
     _write(null, this.cache.get(doc._id))
+  } else if (self.bloom && !doc._rev && !self.bloom.test(doc._id)) {
+    _write(true)
   } else {
     self.meta(doc._id, _write)
   }
@@ -292,6 +315,19 @@ Database.prototype.compact = function (cb) {
     if (count === 0) cb()
     else self.mutex.afterWrite(function () { cb(null, count) })
   })
+}
+Database.prototype.changes = function (opts) {
+  if (!opts) opts = {}
+  // TODO: continuous
+  // TODO: include_docs
+  var r = this.mutex.lev.createReadStream(
+    { start: encode([this.name, 0, opts.since || null])
+    , end: encode([this.name, 0, {}])
+    })
+  r.on('data', function (row) {
+    r.emit('row', row.value[0])
+  })
+  return r
 }
 
 Database.prototype.delete = Database.prototype.del

@@ -15,7 +15,9 @@
     "lodash": "~1.3.1",
     "async": "~0.2.9",
     "okdone": "~0.3.0",
-    "level-mutex": "~0.2.0"
+    "level-mutex": "~0.2.0",
+    "bloomfilter": "0.0.12",
+    "bloem": "~0.2.3"
   },
   "devDependencies": {
     "cleanup": "~0.2.0",
