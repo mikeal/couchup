@@ -1,6 +1,6 @@
 {
   "name": "couchup",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "A CouchDB implementation on top of levelup.",
   "main": "index.js",
   "dependencies": {
