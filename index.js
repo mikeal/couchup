@@ -191,7 +191,7 @@ Database.prototype.put = function (doc, opts, cb) {
     cb = opts
     opts = {}
   }
-  if (!doc._id) doc._id = uuid()
+  if (typeof doc._id !== 'string') doc._id = uuid()
 
   function _save (meta) {
     var seq
@@ -255,7 +255,8 @@ Database.prototype.put = function (doc, opts, cb) {
   function _write (e, meta) {
     if (_checkPending()) return
 
-    if (e || meta.rev === doc._rev || opts.new_edits === false) {
+    if (!e && opts.new_edits === false && meta.rev === doc._rev) cb(null, meta)
+    else if (e || meta.rev === doc._rev || opts.new_edits === false) {
       _save(meta || {})
     } else {
       cb(new Error('rev does not match.'))
