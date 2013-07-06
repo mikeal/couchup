@@ -1,6 +1,6 @@
 ## couchup
 
-`couchup` is a database. The goal is to build a data model well suited for mobile applications that may need to work offline and sync later on. This data model is inspired by CouchDB but diverges greatly in the way it handles and resolves the revision history and conflicts. `couchup` implements a "most writes wins" conflict resolution scheme and does not require or even allow user specific conflict resolution.
+`couchup` is a database. The goal is to build a data model well suited for mobile applications that may need to work offline and sync later on and maintain smart client side caches. This data model is inspired by CouchDB but diverges greatly in the way it handles and resolves the revision history and conflicts. `couchup` implements a "most writes wins" conflict resolution scheme and does not require or even allow user specific conflict resolution.
 
 Another goal of `couchup` is to be performant and modular. This repository only implements the base document storage layer. Indexes, attachments and replicators are implemented as additional modules.
 
@@ -51,7 +51,7 @@ db.info(function (e, i) {
 
 #### Incompatibilities w/ CouchDB
 
-Pull replication from CouchDB works and will continue to work continuously if you aren't updating the `couchup` node. Bi-Directional replication with CouchDB will eventually result in conflicts on the CouchDB side because `couchup` converts CouchDB's revision tree to a linear revision sequence.
+Pull replication from CouchDB works and will continue to work continuously if you aren't updating the `couchup` node you're writing it to. Bi-Directional replication with CouchDB will eventually result in conflicts on the CouchDB side because `couchup` converts CouchDB's revision tree to a linear revision sequence.
 
 Similarly, push replication to Apache CouchDB will work once but writing again will likely cause unnecessary conflicts on the CouchDB side.
 
