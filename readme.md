@@ -33,19 +33,44 @@ db.compact() // remove old revisions and sequences from the database.
 ```
 
 ```javascript
-var changes = db.changes()
-changes.on('row', function (row) {
-  console.log(row.seq, row.id)
+db.info(function (e, i) {
+  if (e) throw e
+  console.log(i.update_seq, i.doc_count)
+})
+```
+
+### SLEEP Support
+
+```javascript
+var changes = db.sleep()
+changes.on('entry', function (entry) {
+  console.log(entry.seq, entry.id)
 })
 changes.on('end' function () {
   console.log('done')
 })
 ```
 
+And can be used with `sleep-ref` for replicating over the network via tcp,tls,http and https.
+
 ```javascript
-db.info(function (e, i) {
+var sleepref = require('sleep-ref')
+  , s = sleepref(db.sleep.bind(db))
+  ;
+http.createServer(s.httpHandler.bind(s)).listen(8080, function () {
+  db2.pull('http://localhost:8080/', function (e) {
+    if (e) throw e
+    // all replicated over the network
+  })
+})
+```
+
+You can also replicate between database objects in process.
+
+```javascript
+db.clone(db2, function (e) {
   if (e) throw e
-  console.log(i.update_seq, i.doc_count)
+  // all replicated
 })
 ```
 
