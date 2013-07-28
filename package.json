@@ -17,10 +17,11 @@
     "level-mutex": "~0.2.0",
     "bloomfilter": "0.0.12",
     "JSONStream": "~0.6.4",
-    "byteslice": "~0.2.0"
+    "byteslice": "~0.2.0",
+    "sleep-ref": "~0.3.0"
   },
   "devDependencies": {
-    "cleanup": "~0.2.0",
+    "cleanup": "~0.3.0",
     "rimraf": "~2.1.4",
     "okdone": "~0.3.0"
   },
