@@ -1,7 +1,6 @@
 var util = require('util')
   , events = require('events')
   , levelup = require('levelup')
-  , bytewise = require('bytewise')
   , once = require('once')
   , lru = require('lru-cache')
   , uuid = require('node-uuid')
@@ -9,11 +8,8 @@ var util = require('util')
   , http = require('./lib/http')
   , mutex = require('level-mutex')
   , crypto = require('crypto')
+  , byteslice = require('byteslice')
   , bloomfilter = require('bloomfilter')
-  ;
-
-var encode = bytewise.encode
-  , decode = bytewise.decode
   , noop = function () {}
   ;
 
@@ -47,25 +43,26 @@ function Store (opts) {
   this.databases = {}
 
   var opts =
-    { start: encode([0, null])
-    , end: encode([0, {}])
+    { start: this.bytes.encode([null])
+    , end: this.bytes.encode([{}])
     }
 
   var reader = this.mutex.lev.createReadStream(opts)
   reader.on('data', function (data) {
-    var key = decode(data.key)
-    self.databases[key[2]] = new Database(self, key[2], data.value)
+    var key = self.bytes.decode([data.key])
+    self.databases[key[0]] = new Database(self, key[0], data.value)
   })
   reader.on('end', function () {
     self.kick()
   })
 }
 util.inherits(Store, Deferring)
+Store.prototype.bytes = byteslice(['_meta', 'couchup'])
 Store.prototype.put = function (name, cb) {
   var self = this
   this.defer(function () {
     if (self.databases[name]) return cb(new Error("Database already exists."))
-    self.mutex.put(encode([0, name]), 0, function (err) {
+    self.mutex.put(self.bytes.encode([name]), 0, function (err) {
       if (err) return cb(err)
       return cb(null, self.databases[name])
     })
@@ -83,25 +80,11 @@ Store.prototype.delete = function (name, cb) {
   var p = {}
     , self = this
     ;
-  self.mutex.del(encode([0, name]), function () {
-    var all = self.lev.createKeyStream(
-        { start: encode([name, null])
-        , end: encode([name, {}])
-        })
-      , count = 0
-      ;
-    all.on('data', function (rawkey) {
-      self.mutex.del(rawkey, noop)
-      count += 1
-    })
-    all.on('end', function () {
-      delete self.databases[name]
-      if (count === 0) cb(null)
-      else self.mutex.afterWrite(function () {cb(null)})
-    })
+  self.get(name, function (e, db) {
+    if (e) return cb(e)
+    db.deleteDatabase(cb)
   })
 }
-
 
 function hashdoc (doc) {
   if (doc._rev) {
@@ -130,6 +113,8 @@ function Database (store, name, seq) {
   this.cache = lru()
   this.pending = []
 
+  this.bytes = byteslice([name, 'couchup'])
+
   var self = this
   self.mutex.on('flushed', function () {
     self.pending = []
@@ -139,15 +124,19 @@ function Database (store, name, seq) {
   //   because this is the first read sent to the mutex
   //   we'll be able to get the first sequence
   //   before we do any writes.
-  self.mutex.peekLast({end: encode([self.name, 0, {}])}, function (e, key, info) {
-    // TODO: how and why would we get an error here and what is the best way to handle it
-    if (e) throw e
-    key = decode(key)
-    if (key[0] !== self.name || key[1] !== 0) {
+
+  var lastSeekOptions =
+    { end: self.bytes.encode(['seq', {}])
+    , start: self.bytes.encode(['seq', null])
+    }
+
+  self.mutex.peekLast(lastSeekOptions, function (e, key, info) {
+    if (e) {
       self.sequence = 0
       self.doc_count = 0
     } else {
-      self.sequence = key[2]
+      key = self.bytes.decode(key)
+      self.sequence = key[1]
       self.doc_count = info[1]
     }
     self.emit('init')
@@ -158,7 +147,7 @@ function Database (store, name, seq) {
     store.opts.bloom = {size: 64 * 256 * 256, hashes: 16}
   }
   if (store.opts.bloom) {
-    var changes = self.changes()
+    var changes = self.sleep()
     self._bloom = new bloomfilter.BloomFilter(store.opts.bloom.size, store.opts.bloom.hashes)
     function onRow (row) {
       self._bloom.add(row.id)
@@ -174,13 +163,37 @@ function Database (store, name, seq) {
   }
 }
 util.inherits(Database, events.EventEmitter)
+Database.prototype.deleteDatabase = function (cb) {
+  var self = this
+
+  self.mutex.del(self.store.bytes.encode([self.name]), function () {
+    var all = self.mutex.lev.createKeyStream(
+        { start: self.bytes.encode([null])
+        , end: self.bytes.encode([{}])
+        })
+      , count = 0
+      ;
+    all.on('data', function (rawkey) {
+      self.mutex.del(rawkey, noop)
+      count += 1
+    })
+    all.on('end', function () {
+      delete self.store.databases[self.name]
+      if (count === 0) cb(null)
+      else self.mutex.afterWrite(function () {cb(null)})
+    })
+  })
+}
+
 Database.prototype.get = function (id, cb) {
   var self = this
-  self.mutex.peekLast({end: encode([this.name, 1, id, {}])}, function (err, key, value) {
-    if (err) return cb(err)
+  var opts =
+    { start:self.bytes.encode(['docs', id, null])
+    , end: self.bytes.encode(['docs', id, {}])
+    }
+  self.mutex.peekLast(opts, function (err, key, value) {
+    if (err) return cb(new Error('Not found.'))
     if (value._deleted) return cb(new Error('Not found. Deleted.'))
-    key = decode(key)
-    if (key[2] !== id || key[0] !== self.name || key[1] !== 1) return cb(new Error('Not found.'))
     cb(null, value)
   })
 }
@@ -238,10 +251,10 @@ Database.prototype.put = function (doc, opts, cb) {
     else self.doc_count + 1
 
     // Write the new sequence
-    if (seq !== -1) self.mutex.put(encode([self.name, 0, meta.seq]), [meta, self.doc_count], noop)
+    if (seq !== -1) self.mutex.put(self.bytes.encode(['seq', meta.seq]), [meta, self.doc_count], noop)
 
     // Write an entry for this revision
-    self.mutex.put(encode([self.name, 1, doc._id, meta.seq, doc._rev, !!doc._deleted]), doc, function (e) {
+    self.mutex.put(self.bytes.encode(['docs', doc._id, meta.seq, doc._rev, !!doc._deleted]), doc, function (e) {
       if (e) return cb(e)
       self.emit('change', meta)
       cb(null, meta)
@@ -291,8 +304,8 @@ Database.prototype.del = function (doc, cb) {
 Database.prototype.compact = function (cb) {
   var self = this
     , keys = self.store.lev.createKeyStream(
-      { end: encode([this.name, 1, null])
-      , start: encode([this.name, 1, {}])
+      { end: self.bytes.encode(['docs', null])
+      , start: self.bytes.encode(['docs', {}])
       , reverse: true
       })
     , current = null
@@ -300,13 +313,13 @@ Database.prototype.compact = function (cb) {
     , count = 0
     ;
   keys.on('data', function (rawkey) {
-    var key = decode(rawkey)
-      , seq = key[3]
-      , docid = key[2]
+    var key = self.bytes.decode(rawkey)
+      , seq = key[2]
+      , docid = key[1]
       ;
 
     if (current === docid) {
-      self.mutex.del(encode([self.name, 0, seq]), noop)
+      self.mutex.del(self.bytes.encode(['seq', seq]), noop)
       self.mutex.del(rawkey, noop)
       count = count + 1
     }
@@ -317,29 +330,35 @@ Database.prototype.compact = function (cb) {
     else self.mutex.afterWrite(function () { cb(null, count) })
   })
 }
-Database.prototype.changes = function (opts) {
+Database.prototype.sleep = function (opts) {
+  var self = this
   if (!opts) opts = {}
   // TODO: continuous
-  // TODO: include_docs
+  // TODO: include_data
   var r = this.mutex.lev.createReadStream(
-    { start: encode([this.name, 0, opts.since || null])
-    , end: encode([this.name, 0, {}])
+    { start: self.bytes.encode(['seq', opts.since || 0])
+    , end: self.bytes.encode(['seq', {}])
     })
   r.on('data', function (row) {
+    if (opts.include_data) {
+      console.log(row)
+      // self.mutex.peekLast(row)
+    }
     r.emit('row', row.value[0])
   })
   return r
 }
-
 Database.prototype.delete = Database.prototype.del
 Database.prototype.meta = function (id, cb) {
   var self = this
-  self.mutex.peekLast({end: encode([self.name, 1, id, {}])}, function (err, key, value) {
-    if (err) return cb(err)
-    key = decode(key)
-    if (key[2] !== id || key[0] !== self.name || key[1] !== 1) return cb(new Error('Not found.'))
-    // [this.database.name, 1, doc._id, this.sequence, doc._rev, !!doc._deleted]
-    cb(null, {_deleted: key[5], rev: key[4], id: id, seq: key[3]})
+    , opts =
+      { end: self.bytes.encode(['docs', id, {}])
+      , start: self.bytes.encode(['docs', id, null])
+      }
+  self.mutex.peekLast(opts, function (err, key, value) {
+    if (err) return cb(new Error('Not found.'))
+    key = self.bytes.decode(key)
+    cb(null, {_deleted: key[4], rev: key[3], id: id, seq: key[2]})
   })
 }
 Database.prototype.info = function (cb) {
@@ -350,6 +369,33 @@ Database.prototype.info = function (cb) {
     self.on('init', function () { self.info(cb) })
   }
 }
+// Database.prototype.getSequences = function (opts) {
+//   var self = this
+//     , cachedRows = []
+//     , ee = new events.EventEmitter()
+//     ;
+//   var r = this.mutex.lev.createReadStream(
+//     { start: encode([this.name, 0, opts.since || null])
+//     , end: encode([this.name, 0, {}])
+//     })
+//   function cacheRow (row) {
+//     cachedRows.append(row)
+//   }
+//   function onRow (row) {
+//     console.log(row)
+//     // ee.emit('entry', {seq:row.seq, rev})
+//   }
+//   r.on('data', function (row) {
+//     r.emit('row', row.value[0])
+//   })
+//   r.on('end', function () {
+//     cachedRows.forEach(onRow)
+//     self.removeListener('change', cacheRow)
+//     if (opts.continuous) {
+//       self.on('change', onRow)
+//     }
+//   })
+// }
 
 function couchup (filename) {
   return new Store({location:filename})

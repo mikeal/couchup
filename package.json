@@ -16,7 +16,8 @@
     "async": "~0.2.9",
     "level-mutex": "~0.2.0",
     "bloomfilter": "0.0.12",
-    "JSONStream": "~0.6.4"
+    "JSONStream": "~0.6.4",
+    "byteslice": "~0.2.0"
   },
   "devDependencies": {
     "cleanup": "~0.2.0",
