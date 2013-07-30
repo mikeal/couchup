@@ -10,7 +10,7 @@ var util = require('util')
   , crypto = require('crypto')
   , byteslice = require('byteslice')
   , bloomfilter = require('bloomfilter')
-  , sleepref = require('../SLEEP')
+  , sleepref = require('SLEEP')
   , noop = function () {}
   ;
 

@@ -6,7 +6,7 @@ var couchup = require('../')
   , bytewise = require('bytewise')
   , uuid = require('node-uuid')
   , async = require('async')
-  , sleepref = require('../../SLEEP')
+  , sleepref = require('SLEEP')
   , http = require('http')
   ;
 
