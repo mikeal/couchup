@@ -10,7 +10,7 @@ The tradeoffs `couchup` has made in revision tree storage along with some other 
 
 ```javascript
 var couchup = require('couchup')
-  , store = couchup('./dbdir')
+  , db = couchup('./dbdir')
   ;
 
 db.put('databaseName', function (e, db) {
