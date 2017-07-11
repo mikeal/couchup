@@ -4,25 +4,25 @@
   "description": "A CouchDB implementation on top of levelup.",
   "main": "index.js",
   "dependencies": {
-    "bytewise": "~0.4.0",
-    "level-peek": "~1.0.6",
-    "leveldown": "~0.6.1",
-    "levelup": "~0.10.0",
-    "lru-cache": "~2.3.0",
+    "bytewise": "~1.1.0",
+    "level-peek": "~2.0.2",
+    "leveldown": "~1.7.2",
+    "levelup": "~1.3.8",
+    "lru-cache": "~4.1.1",
     "mapleTree": "~0.5.0-1",
     "node-uuid": "~1.4.0",
-    "once": "~1.1.1",
-    "lodash": "~1.3.1",
-    "async": "~0.2.9",
-    "level-mutex": "~0.2.0",
-    "bloomfilter": "0.0.12",
-    "JSONStream": "~0.6.4",
+    "once": "~1.4.0",
+    "lodash": "~4.17.4",
+    "async": "~2.5.0",
+    "level-mutex": "~0.7.0",
+    "bloomfilter": "0.0.16",
+    "JSONStream": "~1.3.1",
     "byteslice": "~0.2.0",
-    "sleep-ref": "~0.3.0"
+    "sleep-ref": "~1.1.0"
   },
   "devDependencies": {
     "cleanup": "~0.3.0",
-    "rimraf": "~2.1.4",
+    "rimraf": "~2.6.1",
     "okdone": "~0.3.0"
   },
   "scripts": {
