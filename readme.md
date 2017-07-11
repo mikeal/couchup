@@ -1,5 +1,7 @@
 ## couchup
 
+[![Greenkeeper badge](https://badges.greenkeeper.io/mikeal/couchup.svg)](https://greenkeeper.io/)
+
 `couchup` is a database. The goal is to build a data model well suited for mobile applications that may need to work offline and sync later on and maintain smart client side caches. This data model is inspired by CouchDB but diverges greatly in the way it handles and resolves the revision history and conflicts. `couchup` implements a "most writes wins" conflict resolution scheme and does not require or even allow user specific conflict resolution.
 
 Another goal of `couchup` is to be performant and modular. This repository only implements the base document storage layer. Indexes, attachments and replicators are implemented as additional modules.
